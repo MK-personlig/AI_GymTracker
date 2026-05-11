@@ -5,6 +5,7 @@ import {
   NavLink,
   Outlet,
   useNavigate,
+  useLocation,
 } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth";
 import { supabase, ALLOWED_EMAIL } from "./lib/supabase";
@@ -13,13 +14,19 @@ import Program from "./pages/Program";
 import Workouts from "./pages/Workouts";
 import WorkoutDetail from "./pages/WorkoutDetail";
 import Trends from "./pages/Trends";
+import {
+  ListIcon,
+  CalendarIcon,
+  BarChartIcon,
+  LogOutIcon,
+} from "./components/icons";
 
 export default function App() {
   const { session, loading, email } = useAuth();
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full text-neutral-500">
+      <div className="flex items-center justify-center h-full text-neutral-500 text-sm">
         Loading…
       </div>
     );
@@ -51,45 +58,86 @@ export default function App() {
   );
 }
 
+function pageTitle(pathname: string): string {
+  if (pathname.startsWith("/workouts")) return "Workouts";
+  if (pathname.startsWith("/trends")) return "Trends";
+  return "Program";
+}
+
 function Layout() {
   const navigate = useNavigate();
+  const location = useLocation();
   const signOut = async () => {
     await supabase.auth.signOut();
     navigate("/");
   };
-  const linkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex-1 text-center py-3 text-sm font-medium border-b-2 transition-colors ${
-      isActive
-        ? "border-white text-white"
-        : "border-transparent text-neutral-500 hover:text-neutral-300"
-    }`;
 
   return (
     <div className="flex flex-col h-full max-w-2xl mx-auto">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
-        <h1 className="text-lg font-semibold">Gym Tracker</h1>
+      <header className="sticky top-0 z-30 flex items-center justify-between px-4 h-14 bg-neutral-950/85 backdrop-blur-md border-b border-neutral-800 shrink-0 pt-[env(safe-area-inset-top)]">
+        <h1 className="text-base font-semibold tracking-tight">
+          {pageTitle(location.pathname)}
+        </h1>
         <button
           onClick={signOut}
-          className="text-xs text-neutral-500 hover:text-white"
+          className="w-10 h-10 -mr-2 flex items-center justify-center rounded-full text-neutral-400 hover:text-white hover:bg-neutral-800 active:bg-neutral-700"
+          aria-label="Sign out"
         >
-          Sign out
+          <LogOutIcon className="w-5 h-5" />
         </button>
       </header>
-      <nav className="flex border-b border-neutral-800">
-        <NavLink to="/program" className={linkClass}>
-          Program
-        </NavLink>
-        <NavLink to="/workouts" className={linkClass}>
-          Workouts
-        </NavLink>
-        <NavLink to="/trends" className={linkClass}>
-          Trends
-        </NavLink>
-      </nav>
-      <main className="flex-1 overflow-y-auto p-4">
+      <main className="flex-1 overflow-y-auto px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+5.5rem)]">
         <Outlet />
       </main>
+      <nav
+        aria-label="Primary"
+        className="fixed bottom-0 inset-x-0 z-40 bg-neutral-950/90 backdrop-blur-md border-t border-neutral-800 pb-[env(safe-area-inset-bottom)]"
+      >
+        <div className="max-w-2xl mx-auto flex">
+          <Tab to="/program" label="Program" icon={<ListIcon />} />
+          <Tab to="/workouts" label="Workouts" icon={<CalendarIcon />} />
+          <Tab to="/trends" label="Trends" icon={<BarChartIcon />} />
+        </div>
+      </nav>
     </div>
+  );
+}
+
+function Tab({
+  to,
+  label,
+  icon,
+}: {
+  to: string;
+  label: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <NavLink
+      to={to}
+      className="flex-1 flex flex-col items-center justify-center gap-1 pt-2.5 pb-2 transition-colors"
+    >
+      {({ isActive }) => (
+        <>
+          <span
+            className={
+              isActive
+                ? "text-white"
+                : "text-neutral-500 group-hover:text-neutral-300"
+            }
+          >
+            {icon}
+          </span>
+          <span
+            className={`text-[11px] font-medium ${
+              isActive ? "text-white" : "text-neutral-500"
+            }`}
+          >
+            {label}
+          </span>
+        </>
+      )}
+    </NavLink>
   );
 }
 

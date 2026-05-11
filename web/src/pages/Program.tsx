@@ -1,10 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
-  filterCatalog,
   catalogForType,
+  filterCatalog,
   type CatalogExercise,
 } from "../data/exerciseCatalog";
+import Sheet from "../components/Sheet";
+import Toggle from "../components/Toggle";
+import {
+  PlusIcon,
+  TrashIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  SearchIcon,
+  CheckIcon,
+} from "../components/icons";
 
 type Row = {
   id: number;
@@ -15,17 +26,46 @@ type Row = {
   is_bodyweight_base: boolean;
 };
 
-/** Row as returned from Supabase before normalizing optional flags */
 type ProgramFromDb = Omit<Row, "is_bodyweight_base"> & {
   is_bodyweight_base?: boolean | null;
 };
 
-const TYPES = ["chest", "back", "legs"];
+const TYPES = ["chest", "back", "legs"] as const;
+const TYPE_LABEL: Record<string, string> = {
+  chest: "Chest",
+  back: "Back",
+  legs: "Legs",
+};
+
+function labelize(name: string) {
+  const s = name.replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function normalize(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
+}
+
+function weightSummary(row: Row): string {
+  if (row.is_bodyweight_base) {
+    if (row.default_weight_kg && row.default_weight_kg > 0) {
+      return `Bodyweight + ${row.default_weight_kg} kg`;
+    }
+    return "Bodyweight";
+  }
+  return row.default_weight_kg !== null ? `${row.default_weight_kg} kg` : "—";
+}
 
 export default function Program() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState<Row | null>(null);
+  const [addingType, setAddingType] = useState<string | null>(null);
 
   async function load() {
     const { data, error } = await supabase
@@ -53,36 +93,40 @@ export default function Program() {
   async function updateRow(id: number, patch: Partial<Row>) {
     const { error } = await supabase.from("program").update(patch).eq("id", id);
     if (error) alert(error.message);
-    else load();
+    else await load();
   }
 
-  async function deleteRow(id: number, name: string) {
-    if (!confirm(`Delete "${name}"?`)) return;
+  async function deleteRow(id: number) {
     const { error } = await supabase.from("program").delete().eq("id", id);
     if (error) alert(error.message);
-    else load();
+    else await load();
   }
 
   async function addRow(
     type: string,
     name: string,
     weight: string,
-    afterOrder: number,
     isBodyweightBase: boolean,
   ) {
-    if (!name.trim()) {
+    const trimmed = normalize(name);
+    if (!trimmed) {
       alert("Exercise name required");
       return;
     }
+    const typeRows = rows.filter((r) => r.workout_type === type);
+    const maxOrder = typeRows.reduce(
+      (m, r) => Math.max(m, r.display_order),
+      0,
+    );
     const { error } = await supabase.from("program").insert({
       workout_type: type,
-      exercise_name: name.trim(),
+      exercise_name: trimmed,
       default_weight_kg: weight === "" ? null : parseFloat(weight),
-      display_order: afterOrder + 1,
+      display_order: maxOrder + 1,
       is_bodyweight_base: isBodyweightBase,
     });
     if (error) alert(error.message);
-    else load();
+    else await load();
   }
 
   async function moveRow(workoutType: string, rowId: number, direction: -1 | 1) {
@@ -120,176 +164,207 @@ export default function Program() {
       .update({ display_order: ob })
       .eq("id", a.id);
     if (e3) alert(e3.message);
-    load();
+    await load();
   }
 
-  if (loading) return <p className="text-neutral-500">Loading…</p>;
+  if (loading)
+    return (
+      <div className="space-y-4">
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            className="h-32 rounded-2xl bg-neutral-900/60 border border-neutral-900 animate-pulse"
+          />
+        ))}
+      </div>
+    );
   if (error) return <p className="text-red-400 text-sm">{error}</p>;
 
   return (
-    <div className="space-y-6 pb-12">
-      <p className="text-sm text-neutral-500 px-1">
-        Pick from suggestions or type any exercise name. For pull-ups and
-        similar, turn on &ldquo;BW&rdquo; and enter only the{" "}
-        <strong className="text-neutral-400 font-medium">added</strong> weight
-        (belt, vest) in kg — leave empty for unweighted.
+    <div className="space-y-6 pb-4">
+      <p className="text-sm text-neutral-400 px-1">
+        Your weekly split. Tap an exercise to edit it.
       </p>
       {TYPES.map((type) => {
-        const typeRows = rows.filter((r) => r.workout_type === type);
-        const sorted = [...typeRows].sort(
-          (a, b) => a.display_order - b.display_order,
-        );
-        const maxOrder = typeRows.reduce(
-          (m, r) => Math.max(m, r.display_order),
-          0,
-        );
-        const listId = `exercise-catalog-${type}`;
+        const typeRows = rows
+          .filter((r) => r.workout_type === type)
+          .sort((a, b) => a.display_order - b.display_order);
         return (
           <section key={type}>
-            <h2 className="text-base font-semibold capitalize mb-2 px-1">
-              {type}
-            </h2>
-            <datalist id={listId}>
-              {catalogForType(type).map((e) => (
-                <option key={e.name} value={e.name} label={e.label} />
-              ))}
-            </datalist>
-            <div className="rounded-lg overflow-hidden border border-neutral-800 bg-neutral-900">
-              {typeRows.map((r) => (
-                <RowEditor
-                  key={r.id}
-                  row={r}
-                  workoutType={type}
-                  catalogListId={listId}
-                  onSave={updateRow}
-                  onDelete={deleteRow}
-                  onMove={(dir) => moveRow(type, r.id, dir)}
-                  canMoveUp={sorted[0]?.id !== r.id}
-                  canMoveDown={sorted[sorted.length - 1]?.id !== r.id}
-                />
-              ))}
-              <AddRow
-                type={type}
-                catalogListId={listId}
-                onAdd={(name, weight, bw) =>
-                  addRow(type, name, weight, maxOrder, bw)
-                }
-              />
+            <div className="flex items-center justify-between px-1 mb-2">
+              <h2 className="text-[11px] uppercase tracking-[0.12em] font-semibold text-neutral-400">
+                {TYPE_LABEL[type]}
+              </h2>
+              <span className="text-[11px] text-neutral-600">
+                {typeRows.length} {typeRows.length === 1 ? "exercise" : "exercises"}
+              </span>
+            </div>
+            <div className="rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800">
+              {typeRows.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-neutral-500">
+                  No exercises yet
+                </p>
+              ) : (
+                typeRows.map((r) => (
+                  <button
+                    type="button"
+                    key={r.id}
+                    onClick={() => setEditing(r)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left border-b border-neutral-800 last:border-b-0 active:bg-neutral-800/80 hover:bg-neutral-800/40 transition-colors"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-[15px] truncate">
+                        {labelize(r.exercise_name)}
+                      </div>
+                      <div className="text-xs text-neutral-500 mt-0.5 flex items-center gap-1.5">
+                        {r.is_bodyweight_base && (
+                          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider font-semibold bg-neutral-800 text-neutral-300">
+                            BW
+                          </span>
+                        )}
+                        <span>{weightSummary(r)}</span>
+                      </div>
+                    </div>
+                    <ChevronRightIcon className="w-4 h-4 text-neutral-600 shrink-0" />
+                  </button>
+                ))
+              )}
+              <button
+                type="button"
+                onClick={() => setAddingType(type)}
+                className="w-full flex items-center justify-center gap-2 py-3.5 text-sm font-medium text-neutral-300 hover:text-white bg-neutral-950/40 hover:bg-neutral-800/40 active:bg-neutral-800 border-t border-neutral-800"
+              >
+                <PlusIcon className="w-4 h-4" />
+                Add exercise
+              </button>
             </div>
           </section>
         );
       })}
+
+      {editing && (
+        <EditSheet
+          row={editing}
+          siblings={rows
+            .filter((r) => r.workout_type === editing.workout_type)
+            .sort((a, b) => a.display_order - b.display_order)}
+          onClose={() => setEditing(null)}
+          onPatch={(patch) => updateRow(editing.id, patch)}
+          onDelete={async () => {
+            if (!confirm(`Delete "${labelize(editing.exercise_name)}"?`)) return;
+            await deleteRow(editing.id);
+            setEditing(null);
+          }}
+          onMove={async (dir) => {
+            await moveRow(editing.workout_type, editing.id, dir);
+          }}
+        />
+      )}
+      {addingType && (
+        <AddSheet
+          type={addingType}
+          onClose={() => setAddingType(null)}
+          onAdd={async (name, weight, bw) => {
+            await addRow(addingType, name, weight, bw);
+            setAddingType(null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function RowEditor({
+function EditSheet({
   row,
-  workoutType,
-  catalogListId,
-  onSave,
+  siblings,
+  onClose,
+  onPatch,
   onDelete,
   onMove,
-  canMoveUp,
-  canMoveDown,
 }: {
   row: Row;
-  workoutType: string;
-  catalogListId: string;
-  onSave: (id: number, patch: Partial<Row>) => void;
-  onDelete: (id: number, name: string) => void;
-  onMove: (direction: -1 | 1) => void;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
+  siblings: Row[];
+  onClose: () => void;
+  onPatch: (patch: Partial<Row>) => Promise<void>;
+  onDelete: () => void;
+  onMove: (direction: -1 | 1) => Promise<void>;
 }) {
-  const [name, setName] = useState(row.exercise_name);
+  const [name, setName] = useState(labelize(row.exercise_name));
   const [weight, setWeight] = useState<string>(
     row.default_weight_kg?.toString() ?? "",
   );
-  const [bwBase, setBwBase] = useState(row.is_bodyweight_base);
+  const [bw, setBw] = useState(row.is_bodyweight_base);
 
   useEffect(() => {
-    setName(row.exercise_name);
+    setName(labelize(row.exercise_name));
     setWeight(row.default_weight_kg?.toString() ?? "");
-    setBwBase(row.is_bodyweight_base);
+    setBw(row.is_bodyweight_base);
   }, [row.id, row.exercise_name, row.default_weight_kg, row.is_bodyweight_base]);
 
-  function save() {
-    const newWeight = weight === "" ? null : parseFloat(weight);
-    if (
-      name !== row.exercise_name ||
-      newWeight !== row.default_weight_kg ||
-      bwBase !== row.is_bodyweight_base
-    ) {
-      onSave(row.id, {
-        exercise_name: name,
-        default_weight_kg: newWeight,
-        is_bodyweight_base: bwBase,
-      });
+  function commitName() {
+    const normalized = normalize(name) || row.exercise_name;
+    if (normalized !== row.exercise_name) {
+      onPatch({ exercise_name: normalized });
+    }
+  }
+  function commitWeight() {
+    const next = weight === "" ? null : parseFloat(weight);
+    if (next !== row.default_weight_kg) {
+      onPatch({ default_weight_kg: next });
+    }
+  }
+  function commitBw(next: boolean) {
+    setBw(next);
+    if (next !== row.is_bodyweight_base) {
+      onPatch({ is_bodyweight_base: next });
     }
   }
 
   const suggestions = useMemo(
-    () => filterCatalog(workoutType, name, 6),
-    [workoutType, name],
+    () => filterCatalog(row.workout_type, name, 6),
+    [row.workout_type, name],
   );
-
-  const norm = name.trim().toLowerCase().replace(/\s+/g, "_");
-  const showQuickPick =
+  const showSuggestions =
     name.trim().length > 0 &&
-    suggestions.length > 0 &&
-    !(suggestions.length === 1 && suggestions[0].name === norm);
+    !suggestions.some(
+      (s) =>
+        s.label.toLowerCase() === name.trim().toLowerCase() ||
+        s.name === normalize(name),
+    );
 
-  function applyCatalogPick(s: CatalogExercise) {
-    setName(s.name);
-    setBwBase(!!s.bodyweightBase);
-    onSave(row.id, {
-      exercise_name: s.name,
-      default_weight_kg: row.default_weight_kg,
-      is_bodyweight_base: !!s.bodyweightBase,
-    });
-  }
+  const idx = siblings.findIndex((s) => s.id === row.id);
+  const canMoveUp = idx > 0;
+  const canMoveDown = idx >= 0 && idx < siblings.length - 1;
 
   return (
-    <div className="flex flex-col gap-1 px-3 py-2 border-b border-neutral-800 last:border-b-0">
-      <div className="flex items-start gap-2">
-        <div className="flex flex-col gap-0.5 shrink-0 pt-0.5">
-          <button
-            type="button"
-            disabled={!canMoveUp}
-            onClick={() => onMove(-1)}
-            className="text-neutral-500 hover:text-white disabled:opacity-25 text-xs leading-none px-1"
-            aria-label="Move up"
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            disabled={!canMoveDown}
-            onClick={() => onMove(1)}
-            className="text-neutral-500 hover:text-white disabled:opacity-25 text-xs leading-none px-1"
-            aria-label="Move down"
-          >
-            ↓
-          </button>
-        </div>
-        <div className="flex-1 min-w-0 space-y-1">
+    <Sheet open onClose={onClose} title="Edit exercise">
+      <div className="space-y-5">
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
+            Name
+          </label>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            onBlur={save}
-            list={catalogListId}
-            className="w-full bg-neutral-800/50 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600"
+            onBlur={commitName}
+            placeholder="e.g. Incline chest press"
+            className="w-full bg-neutral-800 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
           />
-          {showQuickPick && (
-            <div className="flex flex-wrap gap-1">
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
               {suggestions.map((s) => (
                 <button
                   key={s.name}
                   type="button"
-                  className="text-[11px] px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => applyCatalogPick(s)}
+                  onClick={() => {
+                    setName(s.label);
+                    commitBw(!!s.bodyweightBase);
+                    onPatch({
+                      exercise_name: s.name,
+                      is_bodyweight_base: !!s.bodyweightBase,
+                    });
+                  }}
+                  className="text-xs px-2.5 py-1 rounded-full bg-neutral-800 text-neutral-300 hover:bg-neutral-700 active:bg-neutral-600"
                 >
                   {s.label}
                 </button>
@@ -297,170 +372,207 @@ function RowEditor({
             </div>
           )}
         </div>
-        <label
-          className="flex flex-col items-center gap-0.5 shrink-0 text-[10px] text-neutral-500 pt-1 w-9"
-          title="Bodyweight movement — weight is added load only"
-        >
-          <span>BW</span>
-          <input
-            type="checkbox"
-            checked={bwBase}
-            onChange={(e) => {
-              setBwBase(e.target.checked);
-              onSave(row.id, { is_bodyweight_base: e.target.checked });
-            }}
-            className="rounded border-neutral-600"
+
+        <label className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">Bodyweight movement</div>
+            <div className="text-xs text-neutral-500 mt-0.5">
+              Pull-ups, dips, push-ups. Weight below = added load only.
+            </div>
+          </div>
+          <Toggle
+            checked={bw}
+            onChange={commitBw}
+            ariaLabel="Bodyweight movement"
           />
         </label>
-        <div className="flex items-center gap-0.5 shrink-0">
+
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
+            {bw ? "Added weight (kg)" : "Weight (kg)"}
+          </label>
           <input
             type="number"
             inputMode="decimal"
             step="0.5"
             value={weight}
-            placeholder={bwBase ? "+" : "kg"}
-            title={
-              bwBase
-                ? "Added kg (belt, vest). Empty = unweighted."
-                : "Weight in kg"
-            }
             onChange={(e) => setWeight(e.target.value)}
-            onBlur={save}
-            className="w-14 bg-neutral-800/50 rounded px-1 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-neutral-600 placeholder-neutral-600"
+            onBlur={commitWeight}
+            placeholder={bw ? "0 = bodyweight only" : "kg"}
+            className="w-full bg-neutral-800 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
           />
-          <span className="text-[10px] text-neutral-500 w-7">
-            {bwBase ? "add" : "kg"}
-          </span>
         </div>
+
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <button
+            type="button"
+            disabled={!canMoveUp}
+            onClick={() => onMove(-1)}
+            className="flex items-center justify-center gap-1.5 py-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-600 disabled:opacity-30 disabled:cursor-not-allowed text-sm"
+          >
+            <ChevronUpIcon className="w-4 h-4" />
+            Move up
+          </button>
+          <button
+            type="button"
+            disabled={!canMoveDown}
+            onClick={() => onMove(1)}
+            className="flex items-center justify-center gap-1.5 py-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-600 disabled:opacity-30 disabled:cursor-not-allowed text-sm"
+          >
+            <ChevronDownIcon className="w-4 h-4" />
+            Move down
+          </button>
+        </div>
+
         <button
           type="button"
-          onClick={() => onDelete(row.id, row.exercise_name)}
-          className="text-neutral-500 hover:text-red-400 text-xl w-7 leading-none shrink-0 pt-0.5"
-          aria-label="Delete"
+          onClick={onDelete}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border border-red-900/60 text-red-400 hover:bg-red-950/40 active:bg-red-900/40 text-sm font-medium"
         >
-          ×
+          <TrashIcon className="w-4 h-4" />
+          Delete exercise
         </button>
       </div>
-    </div>
+    </Sheet>
   );
 }
 
-function AddRow({
+function AddSheet({
   type,
-  catalogListId,
+  onClose,
   onAdd,
 }: {
   type: string;
-  catalogListId: string;
-  onAdd: (name: string, weight: string, isBodyweightBase: boolean) => void;
+  onClose: () => void;
+  onAdd: (name: string, weight: string, bw: boolean) => Promise<void>;
 }) {
-  const [name, setName] = useState("");
+  const [display, setDisplay] = useState("");
+  const [picked, setPicked] = useState<CatalogExercise | null>(null);
   const [weight, setWeight] = useState("");
-  const [bwBase, setBwBase] = useState(false);
-  const [openSuggest, setOpenSuggest] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [bw, setBw] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const suggestions = useMemo(
-    () => filterCatalog(type, name, 10),
-    [type, name],
+    () => filterCatalog(type, display, 12),
+    [type, display],
   );
 
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (!containerRef.current?.contains(e.target as Node)) {
-        setOpenSuggest(false);
-      }
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, []);
-
-  function pick(entry: CatalogExercise) {
-    setName(entry.name);
-    setBwBase(!!entry.bodyweightBase);
-    setOpenSuggest(false);
+  function pick(s: CatalogExercise) {
+    setPicked(s);
+    setDisplay(s.label);
+    setBw(!!s.bodyweightBase);
   }
 
-  function submit() {
-    onAdd(name, weight, bwBase);
-    setName("");
-    setWeight("");
-    setBwBase(false);
-    setOpenSuggest(false);
+  function onDisplayChange(value: string) {
+    setDisplay(value);
+    if (picked && value !== picked.label) setPicked(null);
   }
+
+  async function submit() {
+    if (!display.trim() || submitting) return;
+    setSubmitting(true);
+    const name = picked ? picked.name : normalize(display);
+    await onAdd(name, weight, bw);
+    setSubmitting(false);
+  }
+
+  const previewLabel = display.trim()
+    ? picked
+      ? picked.label
+      : labelize(normalize(display))
+    : "";
 
   return (
-    <div
-      ref={containerRef}
-      className="px-3 py-3 bg-neutral-950 border-t border-neutral-800 space-y-2"
-    >
-      <div className="text-[11px] uppercase tracking-wide text-neutral-600">
-        Add exercise
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <input
-          placeholder="Search or type name (snake_case)…"
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value);
-            setOpenSuggest(true);
-          }}
-          onFocus={() => setOpenSuggest(true)}
-          list={catalogListId}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          className="flex-1 min-w-[12rem] bg-neutral-800/80 rounded px-3 py-2 text-sm placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-600"
-        />
-        <label className="flex items-center gap-2 text-xs text-neutral-400 whitespace-nowrap">
-          <input
-            type="checkbox"
-            checked={bwBase}
-            onChange={(e) => setBwBase(e.target.checked)}
-            className="rounded border-neutral-600"
-          />
-          BW (+kg extra)
+    <Sheet open onClose={onClose} title={`Add to ${TYPE_LABEL[type] ?? type}`}>
+      <div className="space-y-5">
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
+            Exercise
+          </label>
+          <div className="relative">
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
+            <input
+              value={display}
+              onChange={(e) => onDisplayChange(e.target.value)}
+              placeholder="Search or type a name…"
+              autoFocus
+              className="w-full bg-neutral-800 rounded-lg pl-9 pr-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
+            />
+          </div>
+        </div>
+
+        {suggestions.length > 0 && (
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold mb-1.5 px-1">
+              {display.trim() ? "Matching" : "Common"}
+            </div>
+            <ul className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-950/40 max-h-56 overflow-y-auto">
+              {suggestions.map((s) => {
+                const active = picked?.name === s.name;
+                return (
+                  <li key={s.name}>
+                    <button
+                      type="button"
+                      onClick={() => pick(s)}
+                      className={`w-full text-left flex items-center justify-between gap-2 px-3 py-2.5 border-b border-neutral-800 last:border-b-0 ${
+                        active
+                          ? "bg-emerald-500/15 text-white"
+                          : "hover:bg-neutral-800/60 active:bg-neutral-800"
+                      }`}
+                    >
+                      <span className="truncate text-sm">{s.label}</span>
+                      <span className="flex items-center gap-2 shrink-0">
+                        {s.bodyweightBase && (
+                          <span className="text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300">
+                            BW
+                          </span>
+                        )}
+                        {active && (
+                          <CheckIcon className="w-4 h-4 text-emerald-400" />
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        <label className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">Bodyweight movement</div>
+            <div className="text-xs text-neutral-500 mt-0.5">
+              Weight below = added load (belt, vest) only.
+            </div>
+          </div>
+          <Toggle checked={bw} onChange={setBw} ariaLabel="Bodyweight movement" />
         </label>
-        <input
-          type="number"
-          inputMode="decimal"
-          step="0.5"
-          placeholder={bwBase ? "Added kg" : "kg"}
-          value={weight}
-          onChange={(e) => setWeight(e.target.value)}
-          className="w-20 bg-neutral-800/80 rounded px-2 py-2 text-sm text-right placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-600"
-        />
+
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
+            {bw ? "Added weight (kg)" : "Weight (kg)"}
+          </label>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="0.5"
+            value={weight}
+            onChange={(e) => setWeight(e.target.value)}
+            placeholder={bw ? "Leave blank for bodyweight only" : "e.g. 80"}
+            className="w-full bg-neutral-800 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
+          />
+        </div>
+
         <button
           type="button"
           onClick={submit}
-          className="px-4 py-2 rounded-lg bg-neutral-200 text-neutral-900 text-sm font-medium hover:bg-white"
+          disabled={!display.trim() || submitting}
+          className="w-full py-3.5 rounded-lg bg-white text-black font-semibold disabled:opacity-40 disabled:cursor-not-allowed active:bg-neutral-200"
         >
-          Add
+          {submitting ? "Adding…" : previewLabel ? `Add ${previewLabel}` : "Add exercise"}
         </button>
       </div>
-      {openSuggest && suggestions.length > 0 && (
-        <ul className="rounded-md border border-neutral-800 bg-neutral-900 max-h-40 overflow-y-auto text-sm">
-          {suggestions.map((s) => (
-            <li key={s.name}>
-              <button
-                type="button"
-                className="w-full text-left px-3 py-2 hover:bg-neutral-800 flex justify-between gap-2"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => pick(s)}
-              >
-                <span>{s.label}</span>
-                <span className="text-xs text-neutral-500 font-mono shrink-0">
-                  {s.name}
-                  {s.bodyweightBase ? " · BW" : ""}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    </Sheet>
   );
 }

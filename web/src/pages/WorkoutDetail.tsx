@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { ChevronLeftIcon } from "../components/icons";
 
 type Workout = {
   id: string;
@@ -21,6 +22,28 @@ type Run = {
   distance_km: number | null;
   notes: string | null;
 };
+
+const TYPE_STYLES: Record<string, string> = {
+  chest: "bg-sky-500/15 text-sky-300 ring-1 ring-inset ring-sky-500/30",
+  back: "bg-violet-500/15 text-violet-300 ring-1 ring-inset ring-violet-500/30",
+  legs: "bg-emerald-500/15 text-emerald-300 ring-1 ring-inset ring-emerald-500/30",
+  run: "bg-orange-500/15 text-orange-300 ring-1 ring-inset ring-orange-500/30",
+};
+
+function labelize(name: string) {
+  const s = name.replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function formatFullDate(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  return d.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
 
 export default function WorkoutDetail() {
   const { id } = useParams();
@@ -53,21 +76,60 @@ export default function WorkoutDetail() {
     })();
   }, [id]);
 
-  if (loading) return <p className="text-neutral-500">Loading…</p>;
+  if (loading)
+    return (
+      <div className="space-y-3">
+        <div className="h-6 w-32 rounded bg-neutral-900 animate-pulse" />
+        <div className="h-24 rounded-xl bg-neutral-900 animate-pulse" />
+        <div className="h-48 rounded-xl bg-neutral-900 animate-pulse" />
+      </div>
+    );
   if (error) return <p className="text-red-400 text-sm">{error}</p>;
   if (!workout) return <p className="text-neutral-500">Not found.</p>;
 
+  const deviationCount = sets.filter((s) => s.is_deviation).length;
+  const skippedCount = sets.filter((s) => s.skipped).length;
+
   return (
-    <div className="pb-12">
-      <Link to="/workouts" className="text-sm text-neutral-500 hover:text-white">
-        ← All workouts
+    <div className="pb-4 space-y-4">
+      <Link
+        to="/workouts"
+        className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-white -ml-1"
+      >
+        <ChevronLeftIcon className="w-4 h-4" />
+        All workouts
       </Link>
-      <header className="mt-3 mb-5">
-        <h2 className="text-xl font-semibold capitalize">
-          {workout.workout_type}
-        </h2>
-        <p className="text-sm text-neutral-500">{workout.date}</p>
+
+      <header className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <span
+            className={`inline-block text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full ${
+              TYPE_STYLES[workout.workout_type] ??
+              "bg-neutral-800 text-neutral-400"
+            }`}
+          >
+            {workout.workout_type}
+          </span>
+          <h2 className="text-xl font-semibold mt-2">
+            {formatFullDate(workout.date)}
+          </h2>
+        </div>
       </header>
+
+      {(deviationCount > 0 || skippedCount > 0) && (
+        <div className="flex gap-2 text-xs">
+          {deviationCount > 0 && (
+            <span className="px-2 py-1 rounded-md bg-yellow-500/10 text-yellow-300 ring-1 ring-inset ring-yellow-500/30">
+              {deviationCount} deviation{deviationCount === 1 ? "" : "s"}
+            </span>
+          )}
+          {skippedCount > 0 && (
+            <span className="px-2 py-1 rounded-md bg-neutral-800 text-neutral-400 ring-1 ring-inset ring-neutral-700">
+              {skippedCount} skipped
+            </span>
+          )}
+        </div>
+      )}
 
       {workout.raw_message && (
         <Box label="What you typed">{workout.raw_message}</Box>
@@ -75,40 +137,60 @@ export default function WorkoutDetail() {
       {workout.notes && <Box label="Notes">{workout.notes}</Box>}
 
       {workout.workout_type === "run" && run && (
-        <div className="mt-2 rounded-lg overflow-hidden border border-neutral-800">
-          <Stat label="Duration">
+        <div className="grid grid-cols-2 gap-2">
+          <StatCard label="Duration">
             {run.duration_minutes ? `${run.duration_minutes} min` : "—"}
-          </Stat>
-          <Stat label="Distance">
+          </StatCard>
+          <StatCard label="Distance">
             {run.distance_km ? `${run.distance_km} km` : "—"}
-          </Stat>
+          </StatCard>
         </div>
       )}
 
       {sets.length > 0 && (
-        <div className="mt-2 rounded-lg overflow-hidden border border-neutral-800">
-          {sets.map((s) => (
-            <div
-              key={s.id}
-              className={`flex justify-between items-center px-3 py-2 bg-neutral-900 border-b border-neutral-800 last:border-b-0 text-sm ${
-                s.skipped ? "opacity-50" : ""
-              }`}
-            >
-              <span
-                className={s.is_deviation ? "text-yellow-400" : "text-neutral-100"}
+        <section>
+          <h3 className="text-[11px] uppercase tracking-[0.12em] font-semibold text-neutral-400 px-1 mb-2">
+            Sets
+          </h3>
+          <div className="rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800">
+            {sets.map((s) => (
+              <div
+                key={s.id}
+                className={`flex justify-between items-center px-4 py-3 border-b border-neutral-800 last:border-b-0 ${
+                  s.is_deviation ? "bg-yellow-500/5" : ""
+                }`}
               >
-                {s.exercise_name}
-              </span>
-              <span className="text-neutral-300">
-                {s.skipped
-                  ? "skipped"
-                  : s.weight_kg !== null
-                    ? `${s.weight_kg} kg`
-                    : "bw"}
-              </span>
-            </div>
-          ))}
-        </div>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className={`text-sm truncate ${
+                      s.skipped
+                        ? "text-neutral-500 line-through"
+                        : "text-neutral-100"
+                    }`}
+                  >
+                    {labelize(s.exercise_name)}
+                  </span>
+                  {s.is_deviation && (
+                    <span className="text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-300 shrink-0">
+                      Deviation
+                    </span>
+                  )}
+                </div>
+                <span
+                  className={`text-sm shrink-0 ${
+                    s.skipped ? "text-neutral-600" : "text-neutral-300"
+                  }`}
+                >
+                  {s.skipped
+                    ? "skipped"
+                    : s.weight_kg !== null
+                      ? `${s.weight_kg} kg`
+                      : "bw"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );
@@ -122,14 +204,16 @@ function Box({
   children: React.ReactNode;
 }) {
   return (
-    <div className="mb-3 p-3 rounded-lg bg-neutral-900 border border-neutral-800">
-      <p className="text-xs text-neutral-500 mb-1">{label}</p>
-      <p className="text-sm">{children}</p>
+    <div className="p-3 rounded-xl bg-neutral-900 border border-neutral-800">
+      <p className="text-[11px] uppercase tracking-wider font-semibold text-neutral-500 mb-1">
+        {label}
+      </p>
+      <p className="text-sm whitespace-pre-wrap">{children}</p>
     </div>
   );
 }
 
-function Stat({
+function StatCard({
   label,
   children,
 }: {
@@ -137,9 +221,11 @@ function Stat({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex justify-between px-3 py-2 bg-neutral-900 border-b border-neutral-800 last:border-b-0 text-sm">
-      <span className="text-neutral-400">{label}</span>
-      <span>{children}</span>
+    <div className="p-3 rounded-xl bg-neutral-900 border border-neutral-800">
+      <p className="text-[11px] uppercase tracking-wider font-semibold text-neutral-500 mb-1">
+        {label}
+      </p>
+      <p className="text-lg font-semibold">{children}</p>
     </div>
   );
 }
