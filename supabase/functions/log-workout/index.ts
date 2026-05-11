@@ -27,6 +27,7 @@ RULES:
 - For runs: extract duration and/or distance if mentioned
 - Anything ambiguous = put verbatim in notes, do not guess
 - Always return every exercise from the base program, even if unchanged
+- For exercises described as "bodyweight + Xkg added load" in the base program, X is only the extra load (belt, vest, plates). Total body weight is not logged unless the user explicitly mentions it.
 
 OUTPUT FORMAT:
 {
@@ -54,6 +55,21 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function formatProgramLine(p: {
+  exercise_name: string;
+  default_weight_kg: number | null;
+  is_bodyweight_base?: boolean | null;
+}): string {
+  const bw = p.is_bodyweight_base === true;
+  if (bw) {
+    if (p.default_weight_kg === null || p.default_weight_kg === undefined) {
+      return `- ${p.exercise_name}: bodyweight (no added load)`;
+    }
+    return `- ${p.exercise_name}: bodyweight + ${p.default_weight_kg}kg added load (belt/vest/plate — not total body weight)`;
+  }
+  return `- ${p.exercise_name}: ${p.default_weight_kg === null ? "bodyweight" : p.default_weight_kg + "kg"}`;
 }
 
 Deno.serve(async (req) => {
@@ -117,7 +133,7 @@ Deno.serve(async (req) => {
     if (workout_type !== "run") {
       const { data, error } = await supabase
         .from("program")
-        .select("exercise_name, default_weight_kg, display_order")
+        .select("exercise_name, default_weight_kg, display_order, is_bodyweight_base")
         .eq("workout_type", workout_type)
         .order("display_order", { ascending: true });
 
@@ -126,11 +142,7 @@ Deno.serve(async (req) => {
         throw new Error(`No program rows found for workout_type "${workout_type}"`);
       }
 
-      programText = data
-        .map((p) =>
-          `- ${p.exercise_name}: ${p.default_weight_kg === null ? "bodyweight" : p.default_weight_kg + "kg"}`
-        )
-        .join("\n");
+      programText = data.map((p) => formatProgramLine(p)).join("\n");
     }
 
     // 2. Build user prompt
