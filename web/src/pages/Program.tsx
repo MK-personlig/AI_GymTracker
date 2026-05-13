@@ -16,6 +16,7 @@ type Row = {
   id: number;
   workout_type: string;
   exercise_name: string;
+  exercise_id: string | null;
   default_weight_kg: number | null;
   default_sets: number | null;
   default_reps: number | null;
@@ -28,6 +29,7 @@ type Row = {
 type ProgramFromDb = Omit<Row, "is_bodyweight_base" | "to_failure"> & {
   is_bodyweight_base?: boolean | null;
   to_failure?: boolean | null;
+  exercise_id?: string | null;
 };
 
 const TYPES = ["chest", "back", "legs", "abs"] as const;
@@ -94,6 +96,7 @@ export default function Program() {
           is_bodyweight_base: !!r.is_bodyweight_base,
           to_failure: !!r.to_failure,
           per_set_weights: r.per_set_weights ?? null,
+          exercise_id: r.exercise_id ?? null,
         })),
       );
     }
@@ -117,6 +120,7 @@ export default function Program() {
   async function addRow(
     type: string,
     name: string,
+    exerciseId: string | null,
     weight: string,
     sets: string,
     reps: string,
@@ -131,6 +135,7 @@ export default function Program() {
     const { error } = await supabase.from("program").insert({
       workout_type: type,
       exercise_name: trimmed,
+      exercise_id: exerciseId,
       default_weight_kg: weight === "" ? null : parseFloat(weight),
       default_sets: sets === "" ? null : parseInt(sets, 10),
       default_reps: toFailure ? null : (reps === "" ? null : parseInt(reps, 10)),
@@ -214,8 +219,8 @@ export default function Program() {
         <AddSheet
           type={addingType}
           onClose={() => setAddingType(null)}
-          onAdd={async (name, weight, sets, reps, bw, toFailure, psw) => {
-            await addRow(addingType, name, weight, sets, reps, bw, toFailure, psw);
+          onAdd={async (name, exerciseId, weight, sets, reps, bw, toFailure, psw) => {
+            await addRow(addingType, name, exerciseId, weight, sets, reps, bw, toFailure, psw);
             setAddingType(null);
           }}
         />
@@ -304,7 +309,17 @@ function DraggableList({
             className="flex-1 flex items-center justify-between gap-3 pr-4 py-3.5 text-left"
           >
             <div className="min-w-0 flex-1">
-              <div className="font-medium text-[15px] truncate">{labelize(r.exercise_name)}</div>
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-[15px] truncate">{labelize(r.exercise_name)}</span>
+                {!r.exercise_id && (
+                  <span
+                    title="Not linked to exercise library — delete and re-add to link"
+                    className="shrink-0 text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400"
+                  >
+                    Old
+                  </span>
+                )}
+              </div>
               <div className="text-xs text-neutral-500 mt-0.5 truncate">{rowSummary(r)}</div>
             </div>
             <ChevronRightIcon className="w-4 h-4 text-neutral-600 shrink-0" />
@@ -410,7 +425,6 @@ function EditSheet({
   function commitSets() {
     const next = sets === "" ? null : parseInt(sets, 10);
     if (next !== row.default_sets) {
-      // Resize perSetWeights array if in per-set mode
       if (perSetMode && next) {
         setPerSetWeights((prev) => {
           const arr = Array.from({ length: next }, (_, i) => prev[i] ?? prev[prev.length - 1] ?? "");
@@ -451,7 +465,6 @@ function EditSheet({
     setPerSetWeights(next);
     onPatch({ per_set_weights: next.map((v) => (v === "" ? 0 : parseFloat(v))) });
   }
-
 
   const timed = isTimedExerciseName(normalize(name));
   const numSets = parseInt(sets, 10) || row.default_sets || 3;
@@ -613,7 +626,7 @@ function AddSheet({
 }: {
   type: string;
   onClose: () => void;
-  onAdd: (name: string, weight: string, sets: string, reps: string, bw: boolean, toFailure: boolean, perSetWeights: number[] | null) => Promise<void>;
+  onAdd: (name: string, exerciseId: string | null, weight: string, sets: string, reps: string, bw: boolean, toFailure: boolean, perSetWeights: number[] | null) => Promise<void>;
 }) {
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<LibraryExercise[]>([]);
@@ -675,17 +688,18 @@ function AddSheet({
   }
 
   async function submit() {
-    const finalName = picked ? picked.id : normalize(search);
+    const finalName = picked ? picked.name : search.trim();
+    const exerciseId = picked ? picked.id : null;
     if (!finalName || submitting) return;
     setSubmitting(true);
     const psw = perSetMode ? perSetWeights.map((v) => (v === "" ? 0 : parseFloat(v))) : null;
-    await onAdd(finalName, weight, sets, reps, bw, toFailure, psw);
+    await onAdd(finalName, exerciseId, weight, sets, reps, bw, toFailure, psw);
     setSubmitting(false);
   }
 
   const timed = isTimedExerciseName(picked ? picked.id : normalize(search));
   const numSets = parseInt(sets, 10) || 3;
-  const previewLabel = picked ? picked.name : search.trim() ? labelize(normalize(search)) : "";
+  const previewLabel = picked ? picked.name : search.trim();
   const showList = !picked && results.length > 0;
 
   return (
