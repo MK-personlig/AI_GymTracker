@@ -14,11 +14,13 @@ import Program from "./pages/Program";
 import Workouts from "./pages/Workouts";
 import WorkoutDetail from "./pages/WorkoutDetail";
 import Trends from "./pages/Trends";
+import Library from "./pages/Library";
 import {
   ListIcon,
   CalendarIcon,
   BarChartIcon,
   LogOutIcon,
+  LibraryIcon,
 } from "./components/icons";
 
 export default function App() {
@@ -52,6 +54,7 @@ export default function App() {
         <Route path="/workouts" element={<Workouts />} />
         <Route path="/workouts/:id" element={<WorkoutDetail />} />
         <Route path="/trends" element={<Trends />} />
+        <Route path="/library" element={<Library />} />
         <Route path="*" element={<Navigate to="/program" replace />} />
       </Route>
     </Routes>
@@ -61,6 +64,7 @@ export default function App() {
 function pageTitle(pathname: string): string {
   if (pathname.startsWith("/workouts")) return "Workouts";
   if (pathname.startsWith("/trends")) return "Trends";
+  if (pathname.startsWith("/library")) return "Exercise Library";
   return "Program";
 }
 
@@ -97,6 +101,7 @@ function Layout() {
           <Tab to="/program" label="Program" icon={<ListIcon />} />
           <Tab to="/workouts" label="Workouts" icon={<CalendarIcon />} />
           <Tab to="/trends" label="Trends" icon={<BarChartIcon />} />
+          <Tab to="/library" label="Library" icon={<LibraryIcon />} />
         </div>
       </nav>
     </div>

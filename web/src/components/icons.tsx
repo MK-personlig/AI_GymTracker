@@ -119,6 +119,13 @@ export const CheckIcon = ({ className = "w-4 h-4" }: IconProps) => (
   </Svg>
 );
 
+export const LibraryIcon = ({ className }: IconProps) => (
+  <Svg className={className}>
+    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+  </Svg>
+);
+
 export const GripIcon = ({ className = "w-4 h-4" }: IconProps) => (
   <svg viewBox="0 0 10 16" fill="currentColor" className={className} aria-hidden="true">
     <circle cx="3" cy="4"  r="1.2" />

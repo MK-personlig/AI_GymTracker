@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
-import {
-  filterCatalog,
-  isTimedExerciseName,
-  type CatalogExercise,
-} from "../data/exerciseCatalog";
+import { isTimedExerciseName } from "../data/exerciseCatalog";
 import Sheet from "../components/Sheet";
 import Toggle from "../components/Toggle";
 import {
@@ -126,6 +122,7 @@ export default function Program() {
     reps: string,
     isBodyweightBase: boolean,
     toFailure: boolean,
+    perSetWeights: number[] | null,
   ) {
     const trimmed = normalize(name);
     if (!trimmed) { alert("Exercise name required"); return; }
@@ -140,6 +137,7 @@ export default function Program() {
       display_order: maxOrder + 1,
       is_bodyweight_base: isBodyweightBase,
       to_failure: toFailure,
+      per_set_weights: perSetWeights && perSetWeights.length > 0 ? perSetWeights : null,
     });
     if (error) alert(error.message);
     else await load();
@@ -216,8 +214,8 @@ export default function Program() {
         <AddSheet
           type={addingType}
           onClose={() => setAddingType(null)}
-          onAdd={async (name, weight, sets, reps, bw, toFailure) => {
-            await addRow(addingType, name, weight, sets, reps, bw, toFailure);
+          onAdd={async (name, weight, sets, reps, bw, toFailure, psw) => {
+            await addRow(addingType, name, weight, sets, reps, bw, toFailure, psw);
             setAddingType(null);
           }}
         />
@@ -454,12 +452,6 @@ function EditSheet({
     onPatch({ per_set_weights: next.map((v) => (v === "" ? 0 : parseFloat(v))) });
   }
 
-  const suggestions = useMemo(() => filterCatalog(row.workout_type, name, 6), [row.workout_type, name]);
-  const showSuggestions =
-    name.trim().length > 0 &&
-    !suggestions.some(
-      (s) => s.label.toLowerCase() === name.trim().toLowerCase() || s.name === normalize(name),
-    );
 
   const timed = isTimedExerciseName(normalize(name));
   const numSets = parseInt(sets, 10) || row.default_sets || 3;
@@ -479,24 +471,6 @@ function EditSheet({
             placeholder="e.g. Incline chest press"
             className="w-full bg-neutral-800 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
           />
-          {showSuggestions && suggestions.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {suggestions.map((s) => (
-                <button
-                  key={s.name}
-                  type="button"
-                  onClick={() => {
-                    setName(s.label);
-                    commitBw(!!s.bodyweightBase);
-                    onPatch({ exercise_name: s.name, is_bodyweight_base: !!s.bodyweightBase });
-                  }}
-                  className="text-xs px-2.5 py-1 rounded-full bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Bodyweight toggle */}
@@ -617,6 +591,21 @@ function EditSheet({
 
 // ─── Add sheet ────────────────────────────────────────────────────────────────
 
+type LibraryExercise = {
+  id: string;
+  name: string;
+  primary_muscles: string[];
+  equipment: string | null;
+  is_custom: boolean;
+};
+
+const TYPE_MUSCLES: Record<string, string[]> = {
+  chest: ["chest"],
+  back: ["lats", "middle back", "lower back", "traps"],
+  legs: ["quadriceps", "hamstrings", "glutes", "calves"],
+  abs: ["abdominals", "obliques"],
+};
+
 function AddSheet({
   type,
   onClose,
@@ -624,147 +613,177 @@ function AddSheet({
 }: {
   type: string;
   onClose: () => void;
-  onAdd: (name: string, weight: string, sets: string, reps: string, bw: boolean, toFailure: boolean) => Promise<void>;
+  onAdd: (name: string, weight: string, sets: string, reps: string, bw: boolean, toFailure: boolean, perSetWeights: number[] | null) => Promise<void>;
 }) {
-  const [display, setDisplay] = useState("");
-  const [picked, setPicked] = useState<CatalogExercise | null>(null);
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState<LibraryExercise[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [picked, setPicked] = useState<LibraryExercise | null>(null);
   const [weight, setWeight] = useState("");
   const [sets, setSets] = useState("3");
   const [reps, setReps] = useState("8");
   const [bw, setBw] = useState(false);
   const [toFailure, setToFailure] = useState(false);
+  const [perSetMode, setPerSetMode] = useState(false);
+  const [perSetWeights, setPerSetWeights] = useState<string[]>(["", "", ""]);
   const [submitting, setSubmitting] = useState(false);
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const suggestions = useMemo(() => filterCatalog(type, display, 12), [type, display]);
+  useEffect(() => {
+    if (debounce.current) clearTimeout(debounce.current);
+    debounce.current = setTimeout(async () => {
+      setSearching(true);
+      let q = supabase.from("exercise_library").select("id,name,primary_muscles,equipment,is_custom").limit(20);
+      if (search.trim()) {
+        q = q.ilike("name", `%${search.trim()}%`);
+      } else {
+        const muscles = TYPE_MUSCLES[type] ?? [];
+        if (muscles.length > 0) q = q.overlaps("primary_muscles", muscles);
+      }
+      q = (q as typeof q).order("is_custom", { ascending: false }).order("name");
+      const { data } = await q;
+      setResults((data as LibraryExercise[]) ?? []);
+      setSearching(false);
+    }, 200);
+    return () => { if (debounce.current) clearTimeout(debounce.current); };
+  }, [search, type]);
 
-  function pick(s: CatalogExercise) {
-    setPicked(s);
-    setDisplay(s.label);
-    setBw(!!s.bodyweightBase);
-    if (s.timed) setReps((r) => (r === "8" ? "60" : r));
+  function pick(ex: LibraryExercise) {
+    setPicked(ex);
+    setSearch(ex.name);
   }
 
-  function onDisplayChange(value: string) {
-    setDisplay(value);
-    if (picked && value !== picked.label) setPicked(null);
+  function onSearchChange(value: string) {
+    setSearch(value);
+    if (picked && value !== picked.name) setPicked(null);
+  }
+
+  function handleSetsChange(v: string) {
+    setSets(v);
+    if (perSetMode) {
+      const n = parseInt(v, 10) || 3;
+      setPerSetWeights((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? prev[prev.length - 1] ?? ""));
+    }
+  }
+
+  function togglePerSetMode(next: boolean) {
+    setPerSetMode(next);
+    if (next) {
+      const n = parseInt(sets, 10) || 3;
+      setPerSetWeights(Array.from({ length: n }, () => weight));
+    }
   }
 
   async function submit() {
-    if (!display.trim() || submitting) return;
+    const finalName = picked ? picked.id : normalize(search);
+    if (!finalName || submitting) return;
     setSubmitting(true);
-    const name = picked ? picked.name : normalize(display);
-    await onAdd(name, weight, sets, reps, bw, toFailure);
+    const psw = perSetMode ? perSetWeights.map((v) => (v === "" ? 0 : parseFloat(v))) : null;
+    await onAdd(finalName, weight, sets, reps, bw, toFailure, psw);
     setSubmitting(false);
   }
 
-  const previewLabel = display.trim() ? (picked ? picked.label : labelize(normalize(display))) : "";
-  const timed = picked?.timed ?? isTimedExerciseName(normalize(display || ""));
+  const timed = isTimedExerciseName(picked ? picked.id : normalize(search));
+  const numSets = parseInt(sets, 10) || 3;
+  const previewLabel = picked ? picked.name : search.trim() ? labelize(normalize(search)) : "";
+  const showList = !picked && results.length > 0;
 
   return (
     <Sheet open onClose={onClose} title={`Add to ${TYPE_LABEL[type] ?? type}`}>
       <div className="space-y-5">
         <div>
-          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
-            Exercise
-          </label>
+          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Exercise</label>
           <div className="relative">
             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
             <input
-              value={display}
-              onChange={(e) => onDisplayChange(e.target.value)}
-              placeholder="Search or type a name…"
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Search exercise library…"
               autoFocus
               className="w-full bg-neutral-800 rounded-lg pl-9 pr-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
             />
           </div>
         </div>
 
-        {suggestions.length > 0 && (
-          <div>
-            <div className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold mb-1.5 px-1">
-              {display.trim() ? "Matching" : "Common"}
-            </div>
-            <ul className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-950/40 max-h-56 overflow-y-auto">
-              {suggestions.map((s) => {
-                const active = picked?.name === s.name;
-                return (
-                  <li key={s.name}>
-                    <button
-                      type="button"
-                      onClick={() => pick(s)}
-                      className={`w-full text-left flex items-center justify-between gap-2 px-3 py-2.5 border-b border-neutral-800 last:border-b-0 ${
-                        active ? "bg-emerald-500/15 text-white" : "hover:bg-neutral-800/60 active:bg-neutral-800"
-                      }`}
-                    >
-                      <span className="truncate text-sm">{s.label}</span>
-                      <span className="flex items-center gap-2 shrink-0">
-                        {s.timed && (
-                          <span className="text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300">
-                            Timed
-                          </span>
-                        )}
-                        {s.bodyweightBase && !s.timed && (
-                          <span className="text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300">
-                            BW
-                          </span>
-                        )}
-                        {active && <CheckIcon className="w-4 h-4 text-emerald-400" />}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+        {showList && (
+          <ul className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-950/40 max-h-48 overflow-y-auto">
+            {searching && results.length === 0 ? (
+              <li className="px-3 py-3 text-sm text-neutral-500">Searching…</li>
+            ) : results.map((ex) => (
+              <li key={ex.id}>
+                <button
+                  type="button"
+                  onClick={() => pick(ex)}
+                  className="w-full text-left flex items-center justify-between gap-2 px-3 py-2.5 border-b border-neutral-800 last:border-b-0 hover:bg-neutral-800/60 active:bg-neutral-800"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm truncate">{ex.name}</div>
+                    {ex.equipment && <div className="text-[10px] text-neutral-500">{ex.equipment}</div>}
+                  </div>
+                  {ex.is_custom && (
+                    <span className="text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 shrink-0">Custom</span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
 
-        <label className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-medium">Bodyweight movement</div>
-            <div className="text-xs text-neutral-500 mt-0.5">Weight = added load (belt, vest) only.</div>
-          </div>
-          <Toggle checked={bw} onChange={setBw} ariaLabel="Bodyweight movement" />
-        </label>
+        {(picked || search.trim()) && (
+          <>
+            <label className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Bodyweight movement</div>
+                <div className="text-xs text-neutral-500 mt-0.5">Weight = added load (belt, vest) only.</div>
+              </div>
+              <Toggle checked={bw} onChange={setBw} ariaLabel="Bodyweight movement" />
+            </label>
 
-        <div className="grid grid-cols-3 gap-2">
-          <NumberField label={bw ? "Added kg" : "kg"} value={weight} onChange={setWeight} step="0.5" placeholder={bw ? "0" : "kg"} />
-          <NumberField label="Sets" value={sets} onChange={setSets} step="1" placeholder="3" />
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-semibold">
-                {timed ? "Seconds" : "Reps"}
-              </span>
-              <button
-                type="button"
-                onClick={() => setToFailure((v) => !v)}
-                className={`text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded transition-colors ${
-                  toFailure
-                    ? "bg-orange-500/20 text-orange-300 ring-1 ring-orange-500/40"
-                    : "bg-neutral-800 text-neutral-500 hover:text-neutral-300"
-                }`}
-              >
-                {toFailure ? "Failure ✓" : "To failure"}
-              </button>
+            <div className="grid grid-cols-3 gap-2">
+              <NumberField label={bw ? "Added kg" : "kg"} value={weight} onChange={setWeight} step="0.5" placeholder={bw ? "0" : "kg"} disabled={perSetMode} />
+              <NumberField label="Sets" value={sets} onChange={handleSetsChange} step="1" placeholder="3" />
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-semibold">{timed ? "Seconds" : "Reps"}</span>
+                  <button type="button" onClick={() => setToFailure((v) => !v)}
+                    className={`text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded transition-colors ${toFailure ? "bg-orange-500/20 text-orange-300 ring-1 ring-orange-500/40" : "bg-neutral-800 text-neutral-500 hover:text-neutral-300"}`}>
+                    {toFailure ? "Failure ✓" : "To failure"}
+                  </button>
+                </div>
+                <input type="number" inputMode="decimal" step="1" value={toFailure ? "" : reps} onChange={(e) => setReps(e.target.value)}
+                  placeholder={toFailure ? "—" : timed ? "60" : "8"} disabled={toFailure}
+                  className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-base text-center focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500 disabled:opacity-40" />
+              </div>
             </div>
-            <input
-              type="number"
-              inputMode="decimal"
-              step="1"
-              value={toFailure ? "" : reps}
-              onChange={(e) => setReps(e.target.value)}
-              placeholder={toFailure ? "—" : timed ? "60" : "8"}
-              disabled={toFailure}
-              className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-base text-center focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500 disabled:opacity-40"
-            />
-          </div>
-        </div>
 
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!display.trim() || submitting}
-          className="w-full py-3.5 rounded-lg bg-white text-black font-semibold disabled:opacity-40 disabled:cursor-not-allowed active:bg-neutral-200"
-        >
+            {numSets > 1 && (
+              <div>
+                <button type="button" onClick={() => togglePerSetMode(!perSetMode)}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border text-sm transition-colors ${perSetMode ? "border-sky-500/40 bg-sky-500/10 text-sky-300" : "border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:text-neutral-200"}`}>
+                  <span>Different weight per set</span>
+                  <span className={`text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded ${perSetMode ? "bg-sky-500/20 text-sky-300" : "bg-neutral-700 text-neutral-500"}`}>{perSetMode ? "On" : "Off"}</span>
+                </button>
+                {perSetMode && (
+                  <div className="mt-2 space-y-2">
+                    {Array.from({ length: numSets }).map((_, i) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <span className="text-xs text-neutral-500 w-10 shrink-0">Set {i + 1}</span>
+                        <input type="number" inputMode="decimal" step="0.5" value={perSetWeights[i] ?? ""}
+                          onChange={(e) => { const next = [...perSetWeights]; next[i] = e.target.value; setPerSetWeights(next); }}
+                          placeholder="kg"
+                          className="flex-1 bg-neutral-800 rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-600" />
+                        <span className="text-xs text-neutral-600 w-4 shrink-0">kg</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        <button type="button" onClick={submit} disabled={!search.trim() || submitting}
+          className="w-full py-3.5 rounded-lg bg-white text-black font-semibold disabled:opacity-40 disabled:cursor-not-allowed active:bg-neutral-200">
           {submitting ? "Adding…" : previewLabel ? `Add ${previewLabel}` : "Add exercise"}
         </button>
       </div>

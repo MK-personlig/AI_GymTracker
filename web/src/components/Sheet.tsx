@@ -11,6 +11,7 @@ type SheetProps = {
 export default function Sheet({ open, onClose, title, children }: SheetProps) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
+  const [kbOffset, setKbOffset] = useState(0);
 
   useEffect(() => {
     if (open) {
@@ -23,23 +24,40 @@ export default function Sheet({ open, onClose, title, children }: SheetProps) {
     return () => clearTimeout(t);
   }, [open]);
 
+  // Lock body scroll while open
   useEffect(() => {
     if (!mounted) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
+    return () => { document.body.style.overflow = prev; };
   }, [mounted]);
 
+  // Escape key
   useEffect(() => {
     if (!mounted) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [mounted, onClose]);
+
+  // Lift sheet above keyboard on iOS (visualViewport shrinks when keyboard opens)
+  useEffect(() => {
+    if (!mounted) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    function update() {
+      const offset = window.innerHeight - vv!.offsetTop - vv!.height;
+      setKbOffset(Math.max(0, offset));
+    }
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    update();
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      setKbOffset(0);
+    };
+  }, [mounted]);
 
   if (!mounted) return null;
 
@@ -56,7 +74,8 @@ export default function Sheet({ open, onClose, title, children }: SheetProps) {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`absolute inset-x-0 bottom-0 mx-auto max-w-2xl bg-neutral-900 rounded-t-3xl border-t border-neutral-800 shadow-2xl transform transition-transform duration-200 ease-out max-h-[92dvh] flex flex-col ${
+        style={{ bottom: kbOffset }}
+        className={`absolute inset-x-0 mx-auto max-w-2xl bg-neutral-900 rounded-t-3xl border-t border-neutral-800 shadow-2xl transform transition-[transform,bottom] duration-200 ease-out max-h-[92dvh] flex flex-col ${
           visible ? "translate-y-0" : "translate-y-full"
         }`}
       >
