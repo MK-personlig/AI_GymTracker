@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import Sheet from "../components/Sheet";
-import { PlusIcon, SearchIcon, TrashIcon } from "../components/icons";
+import { PlusIcon, SearchIcon, TrashIcon, XIcon } from "../components/icons";
 
 type Exercise = {
   id: string;
@@ -257,35 +257,107 @@ function InfoTile({ label, value }: { label: string; value: string }) {
   );
 }
 
+// ── Shared muscle picker ──────────────────────────────────────────────────────
+
 const ALL_MUSCLES = [
   "chest", "lats", "middle back", "lower back", "traps",
   "quadriceps", "hamstrings", "glutes", "calves",
   "abdominals", "obliques", "shoulders", "biceps", "triceps", "forearms",
 ];
 
+function MusclePicker({
+  label,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  selected: string[];
+  onToggle: (m: string) => void;
+}) {
+  return (
+    <div>
+      <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
+        {label}
+      </label>
+      <div className="flex flex-wrap gap-1.5">
+        {ALL_MUSCLES.map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onToggle(m)}
+            className={`text-xs px-2.5 py-1 rounded-full transition-colors ${
+              selected.includes(m)
+                ? "bg-white text-black font-semibold"
+                : "bg-neutral-800 text-neutral-400 hover:text-white"
+            }`}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Add custom sheet ──────────────────────────────────────────────────────────
+
+const CATEGORIES = [
+  "Strength", "Cardio", "Stretching", "Plyometrics",
+  "Olympic Weightlifting", "Powerlifting", "Strongman",
+];
+
 function AddCustomSheet({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
   const [equipment, setEquipment] = useState("");
   const [level, setLevel] = useState("beginner");
-  const [muscles, setMuscles] = useState<string[]>([]);
+  const [force, setForce] = useState("");
+  const [mechanic, setMechanic] = useState("");
+  const [primaryMuscles, setPrimaryMuscles] = useState<string[]>([]);
+  const [secondaryMuscles, setSecondaryMuscles] = useState<string[]>([]);
+  const [instructions, setInstructions] = useState<string[]>([""]);
   const [saving, setSaving] = useState(false);
 
-  function toggleMuscle(m: string) {
-    setMuscles((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]);
+  function togglePrimary(m: string) {
+    setPrimaryMuscles((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]);
+    // auto-remove from secondary if added to primary
+    setSecondaryMuscles((prev) => prev.filter((x) => x !== m));
+  }
+
+  function toggleSecondary(m: string) {
+    setSecondaryMuscles((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]);
+    // auto-remove from primary if added to secondary
+    setPrimaryMuscles((prev) => prev.filter((x) => x !== m));
+  }
+
+  function setStep(i: number, value: string) {
+    setInstructions((prev) => { const next = [...prev]; next[i] = value; return next; });
+  }
+
+  function addStep() {
+    setInstructions((prev) => [...prev, ""]);
+  }
+
+  function removeStep(i: number) {
+    setInstructions((prev) => prev.filter((_, idx) => idx !== i));
   }
 
   async function save() {
     if (!name.trim()) return;
     setSaving(true);
     const id = name.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") + "_custom_" + Date.now();
+    const cleanSteps = instructions.map((s) => s.trim()).filter(Boolean);
     const { error } = await supabase.from("exercise_library").insert({
       id,
       name: name.trim(),
+      category: category || null,
       equipment: equipment.trim() || null,
       level,
-      primary_muscles: muscles,
-      secondary_muscles: [],
-      instructions: [],
+      force: force || null,
+      mechanic: mechanic || null,
+      primary_muscles: primaryMuscles,
+      secondary_muscles: secondaryMuscles,
+      instructions: cleanSteps,
       is_custom: true,
     });
     setSaving(false);
@@ -293,36 +365,43 @@ function AddCustomSheet({ onClose, onSaved }: { onClose: () => void; onSaved: ()
     else onSaved();
   }
 
+  const canSave = name.trim().length > 0 && !saving;
+
   return (
     <Sheet open onClose={onClose} title="Add custom exercise">
-      <div className="space-y-4">
+      <div className="space-y-5">
+
+        {/* Name */}
         <div>
-          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Name</label>
+          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Name *</label>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Exercise name"
+            placeholder="e.g. Cable Fly"
             autoFocus
             className="w-full bg-neutral-800 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
           />
         </div>
 
+        {/* Category + Level */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Equipment</label>
-            <input
-              value={equipment}
-              onChange={(e) => setEquipment(e.target.value)}
-              placeholder="e.g. barbell"
-              className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
-            />
+            <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Category</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-600 text-neutral-200"
+            >
+              <option value="">— none —</option>
+              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
           <div>
             <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Level</label>
             <select
               value={level}
               onChange={(e) => setLevel(e.target.value)}
-              className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-600"
+              className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-600 text-neutral-200"
             >
               <option value="beginner">Beginner</option>
               <option value="intermediate">Intermediate</option>
@@ -331,35 +410,107 @@ function AddCustomSheet({ onClose, onSaved }: { onClose: () => void; onSaved: ()
           </div>
         </div>
 
-        <div>
-          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
-            Primary muscles
-          </label>
-          <div className="flex flex-wrap gap-1.5">
-            {ALL_MUSCLES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => toggleMuscle(m)}
-                className={`text-xs px-2.5 py-1 rounded-full transition-colors ${
-                  muscles.includes(m)
-                    ? "bg-white text-black font-semibold"
-                    : "bg-neutral-800 text-neutral-400 hover:text-white"
-                }`}
-              >
-                {m}
-              </button>
-            ))}
+        {/* Equipment + Force + Mechanic */}
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Equipment</label>
+            <input
+              value={equipment}
+              onChange={(e) => setEquipment(e.target.value)}
+              placeholder="e.g. cable"
+              className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-500"
+            />
+          </div>
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Force</label>
+            <select
+              value={force}
+              onChange={(e) => setForce(e.target.value)}
+              className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-600 text-neutral-200"
+            >
+              <option value="">—</option>
+              <option value="push">Push</option>
+              <option value="pull">Pull</option>
+              <option value="static">Static</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">Mechanic</label>
+            <select
+              value={mechanic}
+              onChange={(e) => setMechanic(e.target.value)}
+              className="w-full bg-neutral-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-600 text-neutral-200"
+            >
+              <option value="">—</option>
+              <option value="compound">Compound</option>
+              <option value="isolation">Isolation</option>
+            </select>
           </div>
         </div>
 
+        {/* Primary muscles */}
+        <MusclePicker
+          label="Primary muscles"
+          selected={primaryMuscles}
+          onToggle={togglePrimary}
+        />
+
+        {/* Secondary muscles */}
+        <MusclePicker
+          label="Secondary muscles"
+          selected={secondaryMuscles}
+          onToggle={toggleSecondary}
+        />
+
+        {/* Instructions */}
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
+            Instructions
+          </label>
+          <div className="space-y-2">
+            {instructions.map((step, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <span className="shrink-0 w-6 h-6 mt-2.5 rounded-full bg-neutral-800 text-neutral-500 text-[11px] font-semibold flex items-center justify-center">
+                  {i + 1}
+                </span>
+                <textarea
+                  value={step}
+                  onChange={(e) => setStep(i, e.target.value)}
+                  placeholder={`Step ${i + 1}…`}
+                  rows={2}
+                  className="flex-1 bg-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-600 placeholder-neutral-600 resize-none"
+                />
+                {instructions.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeStep(i)}
+                    className="shrink-0 mt-2 p-1.5 rounded-lg text-neutral-600 hover:text-red-400 hover:bg-red-950/30 transition-colors"
+                  >
+                    <XIcon className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={addStep}
+            className="mt-2 flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
+          >
+            <PlusIcon className="w-3.5 h-3.5" />
+            Add step
+          </button>
+        </div>
+
+        {/* Save */}
         <button
           onClick={save}
-          disabled={!name.trim() || saving}
+          disabled={!canSave}
           className="w-full py-3.5 rounded-lg bg-white text-black font-semibold disabled:opacity-40"
         >
           {saving ? "Saving…" : "Add exercise"}
         </button>
+
       </div>
     </Sheet>
   );
